@@ -184,18 +184,82 @@ def ensure_asset(cursor: sqlite3.Cursor, owner: int, parent: int, name: str, fil
     return int(cursor.lastrowid)
 
 
+def create_options(cursor: sqlite3.Cursor, unit_size: float, unit: str) -> int:
+    cursor.execute(
+        "INSERT INTO location_options (unit_size,unit_size_unit,use_grid,full_fow,fow_opacity,fow_los,"
+        "vision_mode,vision_min_range,vision_max_range,spawn_locations,move_player_on_token_change,grid_type,"
+        "air_map_background,ground_map_background,underground_map_background,limit_movement_during_initiative,"
+        "drop_ratio) VALUES (?,?,1,0,0.3,0,'triangle',500,1000,'[]',1,'SQUARE','none','none','none',0,1)",
+        (unit_size, unit),
+    )
+    return int(cursor.lastrowid)
+
+
+def create_floor(cursor: sqlite3.Cursor, location_id: int) -> None:
+    cursor.execute(
+        "INSERT INTO floor (location_id,\"index\",name,player_visible,type_,background_color) "
+        "VALUES (?,0,'ground',0,1,NULL)",
+        (location_id,),
+    )
+    floor_id = int(cursor.lastrowid)
+    layers = [
+        ("map", "normal", 1, 0, 1), ("grid", "grid", 1, 0, 0),
+        ("tokens", "normal", 1, 1, 1), ("dm", "normal", 0, 0, 1),
+        ("fow", "fow", 1, 0, 1), ("fow-players", "fow-players", 1, 0, 0),
+        ("draw", "normal", 1, 1, 0),
+    ]
+    cursor.executemany(
+        "INSERT INTO layer (floor_id,name,type_,player_visible,player_editable,selectable,\"index\") "
+        "VALUES (?,?,?,?,?,?,?)",
+        [(floor_id, name, type_, visible, editable, selectable, index)
+         for index, (name, type_, visible, editable, selectable) in enumerate(layers)],
+    )
+
+
+def ensure_campaign(cursor: sqlite3.Cursor, user_id: int, name: str, unit_size: float, unit: str) -> sqlite3.Row:
+    rows = cursor.execute("SELECT * FROM room WHERE creator_id=? AND name=?", (user_id, name)).fetchall()
+    if len(rows) > 1:
+        raise ValueError(f"Expected at most one campaign named {name}, found {len(rows)}")
+    if rows:
+        return rows[0]
+    options_id = create_options(cursor, unit_size, unit)
+    cursor.execute(
+        "INSERT INTO room (name,creator_id,invitation_code,is_locked,default_options_id,logo_id,enable_chat,enable_dice) "
+        "VALUES (?,?,?,0,?,NULL,1,1)",
+        (name, user_id, str(uuid.uuid4()), options_id),
+    )
+    room_id = int(cursor.lastrowid)
+    cursor.execute("INSERT INTO location (room_id,name,options_id,\"index\",archived) VALUES (?,'start',NULL,1,0)",
+                   (room_id,))
+    start_id = int(cursor.lastrowid)
+    create_floor(cursor, start_id)
+    cursor.execute(
+        "INSERT INTO player_room (role,player_id,room_id,active_location_id,user_options_id,notes,last_played) "
+        "VALUES (1,?,?,?,NULL,NULL,NULL)",
+        (user_id, room_id, start_id),
+    )
+    return one(cursor, "SELECT * FROM room WHERE id=?", (room_id,), "campaign")
+
+
 def configure_location(cursor: sqlite3.Cursor, room_id: int, name: str, unit_size: float, unit: str) -> sqlite3.Row:
-    location = one(cursor, "SELECT * FROM location WHERE room_id=? AND name=?", (room_id, name), "location")
+    rows = cursor.execute("SELECT * FROM location WHERE room_id=? AND name=?", (room_id, name)).fetchall()
+    if len(rows) > 1:
+        raise ValueError(f"Expected at most one location named {name}, found {len(rows)}")
+    if rows:
+        location = rows[0]
+    else:
+        next_index = int(cursor.execute(
+            "SELECT COALESCE(MAX(\"index\"),0)+1 FROM location WHERE room_id=?", (room_id,)
+        ).fetchone()[0])
+        cursor.execute(
+            "INSERT INTO location (room_id,name,options_id,\"index\",archived) VALUES (?,?,NULL,?,0)",
+            (room_id, name, next_index),
+        )
+        location = one(cursor, "SELECT * FROM location WHERE id=?", (cursor.lastrowid,), "location")
+        create_floor(cursor, int(location["id"]))
     options_id = location["options_id"]
     if options_id is None:
-        cursor.execute(
-            "INSERT INTO location_options (unit_size,unit_size_unit,use_grid,full_fow,fow_opacity,fow_los,"
-            "vision_mode,vision_min_range,vision_max_range,spawn_locations,move_player_on_token_change,grid_type,"
-            "air_map_background,ground_map_background,underground_map_background,limit_movement_during_initiative,"
-            "drop_ratio) VALUES (?,?,1,0,0.3,0,'triangle',500,1000,'[]',1,'SQUARE','none','none','none',0,1)",
-            (unit_size, unit),
-        )
-        options_id = cursor.lastrowid
+        options_id = create_options(cursor, unit_size, unit)
         cursor.execute("UPDATE location SET options_id=? WHERE id=?", (options_id, location["id"]))
     else:
         cursor.execute(
@@ -277,8 +341,7 @@ def main() -> None:
         with connection:
             cursor = connection.cursor()
             user = one(cursor, "SELECT * FROM user WHERE name=?", (args.user,), "user")
-            room = one(cursor, "SELECT * FROM room WHERE creator_id=? AND name=?",
-                       (user["id"], args.campaign), "campaign")
+            room = ensure_campaign(cursor, user["id"], args.campaign, args.unit_size, args.unit)
             location = configure_location(cursor, room["id"], args.location, args.unit_size, args.unit)
             floors = cursor.execute("SELECT id FROM floor WHERE location_id=?", (location["id"],)).fetchall()
             if len(floors) != 1:
