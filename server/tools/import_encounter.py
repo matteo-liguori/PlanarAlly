@@ -119,6 +119,7 @@ def load_combatants(repo: Path, encounter: dict) -> list[dict]:
         combatants.append(
             {
                 "name": name,
+                "definition_id": character_id,
                 "label": "".join(part[0] for part in name.split()[:2]).upper(),
                 "hp": int(data["combat"]["max_hp"]),
                 "colour": colours[index % len(colours)],
@@ -136,6 +137,7 @@ def load_combatants(repo: Path, encounter: dict) -> list[dict]:
             combatants.append(
                 {
                     "name": f"{data['name']}{suffix}",
+                    "definition_id": group["type"],
                     "label": "".join(part[0] for part in data["name"].split()[:2]).upper(),
                     "hp": int(data["hp"]),
                     "colour": "#a43d46",
@@ -307,7 +309,10 @@ def import_shapes(cursor: sqlite3.Cursor, metadata: dict, layers: dict[str, int]
                              fill_colour=combatant["colour"], default_edit_access=1 if combatant["player"] else 0,
                              default_vision_access=1 if combatant["player"] else 0,
                              default_movement_access=1 if combatant["player"] else 0,
-                             asset_id=token_asset[0] if token_asset else None)
+                             asset_id=token_asset[0] if token_asset else None,
+                             options=json.dumps([[IMPORT_TAG, True],
+                                                 ["veyra_definition_id", combatant["definition_id"]],
+                                                 ["veyra_combatant_name", combatant["name"]]]))
         token_uuid = insert_shape(cursor, token)
         if token_asset:
             token_hash = token_asset[1]
