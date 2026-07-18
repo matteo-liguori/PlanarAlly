@@ -33,6 +33,7 @@ export enum SpellShape {
     Square = "square",
     Circle = "circle",
     Cone = "cone",
+    Line = "line",
     Hex = "hex",
 }
 
@@ -75,7 +76,8 @@ class SpellTool extends Tool implements ITool {
         watch(
             () => this.state.selectedSpellShape,
             async () => {
-                if (selectedState.reactive.focus === undefined && this.state.selectedSpellShape === SpellShape.Cone) {
+                if (selectedState.reactive.focus === undefined &&
+                    [SpellShape.Cone, SpellShape.Line].includes(this.state.selectedSpellShape)) {
                     this.state.selectedSpellShape = SpellShape.Circle;
                 }
                 if (this.shape !== undefined) await this.drawShape();
@@ -132,6 +134,14 @@ class SpellTool extends Tool implements ITool {
                     isSnappable: false,
                 });
                 break;
+            case SpellShape.Line:
+                this.shape = new Rect(
+                    startPosition,
+                    getUnitDistance(this.state.size),
+                    getUnitDistance(1),
+                    { isSnappable: false },
+                );
+                break;
             case SpellShape.Hex:
                 {
                     const gridType = locationSettingsState.raw.gridType.value;
@@ -167,7 +177,7 @@ class SpellTool extends Tool implements ITool {
             InvalidationMode.NORMAL,
         );
 
-        if (this.state.selectedSpellShape === SpellShape.Cone) {
+        if ([SpellShape.Cone, SpellShape.Line].includes(this.state.selectedSpellShape)) {
             const selection = selectedState.raw.focus;
             if (selection === undefined) {
                 console.error("SpellTool: No selection found.");
@@ -197,7 +207,7 @@ class SpellTool extends Tool implements ITool {
     }
 
     async onSelect(): Promise<void> {
-        if (!selectedSystem.hasSelection && this.state.selectedSpellShape === SpellShape.Cone) {
+        if (!selectedSystem.hasSelection && [SpellShape.Cone, SpellShape.Line].includes(this.state.selectedSpellShape)) {
             this.state.selectedSpellShape = SpellShape.Circle;
         }
         if (locationSettingsState.raw.gridType.value === GridType.Square) {
@@ -231,6 +241,16 @@ class SpellTool extends Tool implements ITool {
             (this.shape as ICircle).angle = -Math.atan2(lp.y - center.y, center.x - lp.x) + Math.PI;
             if (this.state.showPublic) sendShapePositionUpdate([this.shape], true);
             layer.invalidate(true);
+        } else if (this.state.selectedSpellShape === SpellShape.Line) {
+            const focusId = selectedState.raw.focus;
+            const focus = focusId === undefined ? undefined : getShape(focusId);
+            if (focus !== undefined) {
+                const start = focus.center;
+                this.shape.center = toGP((start.x + endPoint.x) / 2, (start.y + endPoint.y) / 2);
+                this.shape.angle = Math.atan2(endPoint.y - start.y, endPoint.x - start.x);
+                if (this.state.showPublic) sendShapePositionUpdate([this.shape], true);
+                layer.invalidate(true);
+            }
         } else {
             this.shape.center = endPoint;
             if (this.state.showPublic) sendShapePositionUpdate([this.shape], true);

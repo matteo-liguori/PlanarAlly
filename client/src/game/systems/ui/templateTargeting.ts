@@ -1,6 +1,6 @@
 import type { LocalId } from "../../../core/id";
 
-export type TemplateShape = "square" | "circle" | "cone" | "hex";
+export type TemplateShape = "square" | "circle" | "cone" | "line" | "hex";
 
 export interface TemplateTargetRequest {
     shape: TemplateShape;

@@ -49,24 +49,31 @@ def ensure_player_room(cursor: sqlite3.Cursor, user_id: int, room_id: int, locat
         )
 
 
-def ensure_location_user_option(cursor: sqlite3.Cursor, user_id: int, location_id: int, layer_id: int) -> None:
+def ensure_location_user_option(
+    cursor: sqlite3.Cursor, user_id: int, location_id: int, layer_id: int,
+    pan_x: int, pan_y: int, zoom_display: float,
+) -> None:
     row = cursor.execute(
         "SELECT id FROM location_user_option WHERE location_id=? AND user_id=?", (location_id, user_id)
     ).fetchone()
     if row:
-        cursor.execute("UPDATE location_user_option SET active_layer_id=? WHERE id=?", (layer_id, row["id"]))
+        cursor.execute(
+            "UPDATE location_user_option SET pan_x=?,pan_y=?,zoom_display=?,active_layer_id=? WHERE id=?",
+            (pan_x, pan_y, zoom_display, layer_id, row["id"]),
+        )
     else:
         cursor.execute(
             "INSERT INTO location_user_option (location_id,user_id,pan_x,pan_y,zoom_display,active_layer_id) "
-            "VALUES (?,?,0,0,0,?)", (location_id, user_id, layer_id),
+            "VALUES (?,?,?,?,?,?)", (location_id, user_id, pan_x, pan_y, zoom_display, layer_id),
         )
 
 
 def ensure_participant_locations(
     cursor: sqlite3.Cursor, user_ids: set[int], location_id: int, layer_id: int,
+    pan_x: int, pan_y: int, zoom_display: float = 0.5,
 ) -> None:
     for user_id in user_ids:
-        ensure_location_user_option(cursor, user_id, location_id, layer_id)
+        ensure_location_user_option(cursor, user_id, location_id, layer_id, pan_x, pan_y, zoom_display)
 
 
 def vision_range(character: dict) -> int:

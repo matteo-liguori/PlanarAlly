@@ -15,8 +15,12 @@ import uuid
 from pathlib import Path
 
 from import_controllers import ensure_participant_locations, ensure_player_room, grant_token_control, load_mapping, one, validate_mapping, vision_range
+from import_location import configure_location, create_floor, create_options
 IMPORT_TAG = "veyra_import"
 FONT = "bold 28px sans-serif"
+TOKEN_POSITIONS = [(0.12, 0.80), (0.16, 0.80), (0.20, 0.80), (0.35, 0.60), (0.42, 0.57),
+                   (0.50, 0.55), (0.58, 0.58), (0.39, 0.42), (0.48, 0.38), (0.57, 0.43),
+                   (0.46, 0.25), (0.55, 0.27), (0.50, 0.18)]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -183,38 +187,6 @@ def ensure_asset(cursor: sqlite3.Cursor, owner: int, parent: int, name: str, fil
     return int(cursor.lastrowid)
 
 
-def create_options(cursor: sqlite3.Cursor, unit_size: float, unit: str) -> int:
-    cursor.execute(
-        "INSERT INTO location_options (unit_size,unit_size_unit,use_grid,full_fow,fow_opacity,fow_los,"
-        "vision_mode,vision_min_range,vision_max_range,spawn_locations,move_player_on_token_change,grid_type,"
-        "air_map_background,ground_map_background,underground_map_background,limit_movement_during_initiative,"
-        "drop_ratio) VALUES (?,?,1,0,0.3,0,'triangle',500,1000,'[]',1,'SQUARE','none','none','none',0,1)",
-        (unit_size, unit),
-    )
-    return int(cursor.lastrowid)
-
-
-def create_floor(cursor: sqlite3.Cursor, location_id: int) -> None:
-    cursor.execute(
-        "INSERT INTO floor (location_id,\"index\",name,player_visible,type_,background_color) "
-        "VALUES (?,0,'ground',0,1,NULL)",
-        (location_id,),
-    )
-    floor_id = int(cursor.lastrowid)
-    layers = [
-        ("map", "normal", 1, 0, 1), ("grid", "grid", 1, 0, 0),
-        ("tokens", "normal", 1, 1, 1), ("dm", "normal", 0, 0, 1),
-        ("fow", "fow", 1, 0, 1), ("fow-players", "fow-players", 1, 0, 0),
-        ("draw", "normal", 1, 1, 0),
-    ]
-    cursor.executemany(
-        "INSERT INTO layer (floor_id,name,type_,player_visible,player_editable,selectable,\"index\") "
-        "VALUES (?,?,?,?,?,?,?)",
-        [(floor_id, name, type_, visible, editable, selectable, index)
-         for index, (name, type_, visible, editable, selectable) in enumerate(layers)],
-    )
-
-
 def ensure_campaign(cursor: sqlite3.Cursor, user_id: int, name: str, unit_size: float, unit: str) -> sqlite3.Row:
     rows = cursor.execute("SELECT * FROM room WHERE creator_id=? AND name=?", (user_id, name)).fetchall()
     if len(rows) > 1:
@@ -240,34 +212,6 @@ def ensure_campaign(cursor: sqlite3.Cursor, user_id: int, name: str, unit_size: 
     return one(cursor, "SELECT * FROM room WHERE id=?", (room_id,), "campaign")
 
 
-def configure_location(cursor: sqlite3.Cursor, room_id: int, name: str, unit_size: float, unit: str) -> sqlite3.Row:
-    rows = cursor.execute("SELECT * FROM location WHERE room_id=? AND name=?", (room_id, name)).fetchall()
-    if len(rows) > 1:
-        raise ValueError(f"Expected at most one location named {name}, found {len(rows)}")
-    if rows:
-        location = rows[0]
-    else:
-        next_index = int(cursor.execute(
-            "SELECT COALESCE(MAX(\"index\"),0)+1 FROM location WHERE room_id=?", (room_id,)
-        ).fetchone()[0])
-        cursor.execute(
-            "INSERT INTO location (room_id,name,options_id,\"index\",archived) VALUES (?,?,NULL,?,0)",
-            (room_id, name, next_index),
-        )
-        location = one(cursor, "SELECT * FROM location WHERE id=?", (cursor.lastrowid,), "location")
-        create_floor(cursor, int(location["id"]))
-    options_id = location["options_id"]
-    if options_id is None:
-        options_id = create_options(cursor, unit_size, unit)
-        cursor.execute("UPDATE location SET options_id=? WHERE id=?", (options_id, location["id"]))
-    else:
-        cursor.execute(
-            "UPDATE location_options SET unit_size=?,unit_size_unit=?,use_grid=1,grid_type='SQUARE' WHERE id=?",
-            (unit_size, unit, options_id),
-        )
-    return one(cursor, "SELECT * FROM location WHERE id=?", (location["id"],), "location")
-
-
 def import_shapes(cursor: sqlite3.Cursor, metadata: dict, layers: dict[str, int], map_asset: int, map_hash: str,
                   combatants: list[dict], token_assets: dict[str, tuple[int, str]], users: dict[str, int]) -> tuple[int, int]:
     resolution = metadata["resolution"]
@@ -287,19 +231,18 @@ def import_shapes(cursor: sqlite3.Cursor, metadata: dict, layers: dict[str, int]
         if len(points) < 2:
             continue
         absolute = [[float(point["x"]) * 50, float(point["y"]) * 50] for point in points]
+        origin_x, origin_y = absolute[0]
+        relative = [[point[0] - origin_x, point[1] - origin_y] for point in absolute[1:]]
         wall = shape_values(layers["fow"], "polygon", absolute[0][0], absolute[0][1], "Imported wall",
                             obstacle_count, name_visible=0, stroke_colour="#df4242" if closed else "#3388dd",
                             vision_obstruction=2 if closed else 0, movement_obstruction=1 if closed else 0,
                             is_door=1 if door else 0)
         wall_uuid = insert_shape(cursor, wall)
         cursor.execute("INSERT INTO polygon (shape_id,vertices,line_width,open_polygon) VALUES (?,?,2,1)",
-                       (wall_uuid, json.dumps(absolute[1:])))
+                       (wall_uuid, json.dumps(relative)))
         obstacle_count += 1
-    positions = [(0.12, 0.80), (0.16, 0.80), (0.20, 0.80), (0.35, 0.60), (0.42, 0.57),
-                 (0.50, 0.55), (0.58, 0.58), (0.39, 0.42), (0.48, 0.38), (0.57, 0.43),
-                 (0.46, 0.25), (0.55, 0.27), (0.50, 0.18)]
     for index, combatant in enumerate(combatants):
-        px, py = positions[index] if index < len(positions) else (0.25 + index * 0.03, 0.70)
+        px, py = TOKEN_POSITIONS[index] if index < len(TOKEN_POSITIONS) else (0.25 + index * 0.03, 0.70)
         token_asset = token_assets.get(combatant["name"])
         type_ = "assetrect" if token_asset else "circulartoken"
         token = shape_values(layers["tokens"], type_, width * px, height * py, combatant["name"], index,
@@ -353,6 +296,7 @@ def main() -> None:
             floors = cursor.execute("SELECT id FROM floor WHERE location_id=?", (location["id"],)).fetchall()
             if len(floors) != 1:
                 raise ValueError(f"Expected one floor in {args.location}, found {len(floors)}")
+            cursor.execute("UPDATE floor SET player_visible=1 WHERE id=?", (floors[0]["id"],))
             layers = {row["name"]: row["id"] for row in cursor.execute(
                 "SELECT id,name FROM layer WHERE floor_id=?", (floors[0]["id"],)
             )}
@@ -360,7 +304,18 @@ def main() -> None:
                 if required not in layers:
                     raise ValueError(f"Location is missing required layer: {required}")
             participants = {int(user["id"]), *(users[mapping[item]] for item in encounter["players"])}
-            ensure_participant_locations(cursor, participants, location["id"], layers["tokens"])
+            resolution = metadata["resolution"]["map_size"]
+            width, height = float(resolution["x"]) * 50, float(resolution["y"]) * 50
+            token_points = [
+                (width * TOKEN_POSITIONS[index][0], height * TOKEN_POSITIONS[index][1])
+                for index in range(min(len(combatants), len(TOKEN_POSITIONS)))
+            ]
+            center_x = sum(point[0] for point in token_points) / len(token_points)
+            center_y = sum(point[1] for point in token_points) / len(token_points)
+            ensure_participant_locations(
+                cursor, participants, location["id"], layers["tokens"],
+                round(1920 - center_x), round(1080 - center_y),
+            )
             layer_ids = tuple(layers.values())
             placeholders = ",".join("?" for _ in layer_ids)
             cursor.execute(

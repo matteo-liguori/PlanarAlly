@@ -16,7 +16,7 @@ const selected = spellTool.isActiveTool;
 const isHexGrid = computed(() => locationSettingsState.reactive.gridType.value !== GridType.Square);
 
 const shapes = computed(() =>
-    isHexGrid.value ? [SpellShape.Hex] : [SpellShape.Square, SpellShape.Circle, SpellShape.Cone],
+    isHexGrid.value ? [SpellShape.Hex] : [SpellShape.Square, SpellShape.Circle, SpellShape.Cone, SpellShape.Line],
 );
 
 const canConeBeCast = computed(() => selectedState.reactive.selected.size > 0);
@@ -25,6 +25,7 @@ const translationMapping = {
     [SpellShape.Square]: t("game.ui.tools.DrawTool.square"),
     [SpellShape.Circle]: t("game.ui.tools.DrawTool.circle"),
     [SpellShape.Cone]: t("game.ui.tools.DrawTool.cone"),
+    [SpellShape.Line]: "line",
     [SpellShape.Hex]: t("game.ui.tools.DrawTool.square"),
 };
 
@@ -50,12 +51,12 @@ async function selectShape(shape: SpellShape): Promise<void> {
                 class="option"
                 :class="{
                     'option-selected': spellTool.state.selectedSpellShape === shape,
-                    disabled: !canConeBeCast && shape === SpellShape.Cone,
+                    disabled: !canConeBeCast && [SpellShape.Cone, SpellShape.Line].includes(shape),
                 }"
                 :title="translationMapping[shape]"
                 @click="selectShape(shape)"
             >
-                <font-awesome-icon v-if="shape !== 'cone'" :icon="shape" />
+                <font-awesome-icon v-if="shape !== 'cone'" :icon="shape === 'line' ? 'minus' : shape" />
                 <img v-else :src="baseAdjust('static/img/cone.svg')" />
             </div>
         </div>

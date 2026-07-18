@@ -15,6 +15,7 @@ import { locationSettingsSystem } from "../../systems/settings/location";
 import { locationSettingsState } from "../../systems/settings/location/state";
 import { visionState } from "../../vision/state";
 
+import { drawExploredAreas, rememberVisibleAreas } from "./exploredFog";
 import { FowLayer } from "./fow";
 
 export class FowLightingLayer extends FowLayer {
@@ -200,6 +201,13 @@ export class FowLightingLayer extends FowLayer {
                 preShape.draw(this.ctx, false);
                 preShape.globalCompositeOperation = ogComposite;
                 this.isEmpty = false;
+            }
+
+            if (locationSettingsState.raw.fullFow.value && this.floor === activeFloor.id) {
+                const visibleShapes = [...(accessState.activeTokens.value.get("vision") ?? [])]
+                    .map((id) => getVisualShape(id))
+                    .filter((shape): shape is IShape => shape !== undefined);
+                drawExploredAreas(this.ctx, rememberVisibleAreas(this.floor, visibleShapes));
             }
 
             if (locationSettingsState.raw.fullFow.value && this.floor === activeFloor.id) {
