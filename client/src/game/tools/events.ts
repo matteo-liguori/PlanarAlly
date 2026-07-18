@@ -1,6 +1,7 @@
 import { l2g } from "../../core/conversions";
 import { getVisualShape } from "../id";
 import { getLocalPointFromEvent } from "../input/mouse";
+import { LongPressController } from "../input/longPress";
 import { LayerName } from "../models/floor";
 import { ToolName } from "../models/tools";
 import { floorSystem } from "../systems/floors";
@@ -177,6 +178,20 @@ async function contextMenu(event: MouseEvent): Promise<void> {
     }
 }
 
+export function openContextMenuAt(clientX: number, clientY: number, target: EventTarget): void {
+    const event = {
+        button: 2,
+        clientX,
+        clientY,
+        target,
+        preventDefault: () => undefined,
+        stopPropagation: () => undefined,
+    } as unknown as MouseEvent;
+    void contextMenu(event);
+}
+
+const longPress = new LongPressController((point) => openContextMenuAt(point.clientX, point.clientY, point.target));
+
 export async function keyDown(event: KeyboardEvent): Promise<void> {
     const tool = getActiveTool();
 
@@ -212,6 +227,8 @@ export async function keyUp(event: KeyboardEvent): Promise<void> {
 export function touchStart(event: TouchEvent): void {
     if ((event.target as HTMLElement).tagName !== "CANVAS") return;
 
+    longPress.start(event);
+
     const tool = getActiveTool();
 
     if (event.touches.length === 2) {
@@ -239,6 +256,8 @@ export function touchStart(event: TouchEvent): void {
 
 export async function touchMove(event: TouchEvent): Promise<void> {
     if ((event.target as HTMLElement).tagName !== "CANVAS") return;
+
+    longPress.move(event);
 
     const tool = getActiveTool();
 
@@ -296,6 +315,8 @@ export async function touchMove(event: TouchEvent): Promise<void> {
 
 export function touchEnd(event: TouchEvent): void {
     if ((event.target as HTMLElement).tagName !== "CANVAS") return;
+
+    longPress.cancel();
 
     const tool = getActiveTool();
 

@@ -7,6 +7,8 @@ import type { System } from "../core/systems/models";
 import type { IShape } from "../game/interfaces/shape";
 import type { Tracker } from "../game/systems/trackers/models";
 import type { PanelTab } from "../game/systems/ui/types";
+import type { MovementGuard } from "../game/systems/ui/movementGuards";
+import type { TemplateTargetRequest, TemplateTargetResult } from "../game/systems/ui/templateTargeting";
 
 import type { ModDataBlockFunctions } from "./db";
 
@@ -21,6 +23,7 @@ export interface Mod {
 }
 
 interface ModLoad {
+    currentUser: string;
     systems: Record<string, System>;
     systemsState: typeof SYSTEMS_STATE;
 
@@ -28,6 +31,11 @@ interface ModLoad {
         shape: {
             registerContextMenuEntry: (entry: (shape: LocalId) => Section[]) => void;
             registerTab: (tab: PanelTab, filter: (shape: LocalId) => boolean) => void;
+            registerMovementGuard: (guard: MovementGuard) => void;
+            beginTemplateTargeting: (
+                request: TemplateTargetRequest,
+                completion: (result: TemplateTargetResult) => void,
+            ) => Promise<void>;
         };
     };
 

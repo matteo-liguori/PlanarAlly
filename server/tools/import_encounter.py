@@ -14,10 +14,9 @@ import tempfile
 import uuid
 from pathlib import Path
 
-
+from import_controllers import ensure_participant_locations, ensure_player_room, grant_token_control, load_mapping, one, validate_mapping, vision_range
 IMPORT_TAG = "veyra_import"
 FONT = "bold 28px sans-serif"
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -29,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--user", required=True)
     parser.add_argument("--campaign", required=True)
     parser.add_argument("--location", required=True)
+    parser.add_argument("--controllers", required=True, type=Path)
     parser.add_argument("--unit-size", type=float, default=2.0)
     parser.add_argument("--unit", default="m")
     return parser.parse_args()
@@ -51,7 +51,9 @@ def load_map_metadata(path: Path) -> tuple[dict, int, int]:
 def extract_embedded_image(path: Path, start: int, end: int, assets_dir: Path) -> tuple[str, Path]:
     assets_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1()
-    temporary = Path(tempfile.mkstemp(prefix="pa-map-", dir=assets_dir)[1])
+    descriptor, temporary_name = tempfile.mkstemp(prefix="pa-map-", dir=assets_dir)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
     try:
         with path.open("rb") as source, temporary.open("wb") as target:
             source.seek(start)
@@ -96,13 +98,6 @@ def copy_asset(path: Path, assets_dir: Path) -> tuple[str, Path]:
     return file_hash, destination
 
 
-def one(cursor: sqlite3.Cursor, query: str, values: tuple, label: str) -> sqlite3.Row:
-    rows = cursor.execute(query, values).fetchall()
-    if len(rows) != 1:
-        raise ValueError(f"Expected one {label}, found {len(rows)}")
-    return rows[0]
-
-
 def find_character(repo: Path, character_id: str) -> dict:
     matches = list((repo / "characters").glob(f"*/{character_id}.json"))
     if len(matches) != 1:
@@ -110,7 +105,7 @@ def find_character(repo: Path, character_id: str) -> dict:
     return json.loads(matches[0].read_text(encoding="utf-8"))
 
 
-def load_combatants(repo: Path, encounter: dict) -> list[dict]:
+def load_combatants(repo: Path, encounter: dict, mapping: dict[str, str]) -> list[dict]:
     combatants = []
     colours = ["#3974d8", "#8b5bd6", "#2c9b67"]
     for index, character_id in enumerate(encounter["players"]):
@@ -125,6 +120,8 @@ def load_combatants(repo: Path, encounter: dict) -> list[dict]:
                 "colour": colours[index % len(colours)],
                 "player": True,
                 "asset": None,
+                "controller": mapping.get(character_id),
+                "vision": vision_range(data),
             }
         )
     enemy_dir = repo / "dm_notes" / "session_1" / "enemies" / "jsons" / "enemy_types"
@@ -142,7 +139,7 @@ def load_combatants(repo: Path, encounter: dict) -> list[dict]:
                     "hp": int(data["hp"]),
                     "colour": "#a43d46",
                     "player": False,
-                    "asset": token if token.exists() else None,
+                    "asset": token if token.exists() else None, "controller": None, "vision": 0,
                 }
             )
     return combatants
@@ -272,7 +269,7 @@ def configure_location(cursor: sqlite3.Cursor, room_id: int, name: str, unit_siz
 
 
 def import_shapes(cursor: sqlite3.Cursor, metadata: dict, layers: dict[str, int], map_asset: int, map_hash: str,
-                  combatants: list[dict], token_assets: dict[str, tuple[int, str]]) -> tuple[int, int]:
+                  combatants: list[dict], token_assets: dict[str, tuple[int, str]], users: dict[str, int]) -> tuple[int, int]:
     resolution = metadata["resolution"]
     width = float(resolution["map_size"]["x"]) * 50
     height = float(resolution["map_size"]["y"]) * 50
@@ -306,14 +303,15 @@ def import_shapes(cursor: sqlite3.Cursor, metadata: dict, layers: dict[str, int]
         token_asset = token_assets.get(combatant["name"])
         type_ = "assetrect" if token_asset else "circulartoken"
         token = shape_values(layers["tokens"], type_, width * px, height * py, combatant["name"], index,
-                             fill_colour=combatant["colour"], default_edit_access=1 if combatant["player"] else 0,
-                             default_vision_access=1 if combatant["player"] else 0,
-                             default_movement_access=1 if combatant["player"] else 0,
+                             fill_colour=combatant["colour"], default_edit_access=0,
+                             default_vision_access=0, default_movement_access=0,
                              asset_id=token_asset[0] if token_asset else None,
                              options=json.dumps([[IMPORT_TAG, True],
                                                  ["veyra_definition_id", combatant["definition_id"]],
                                                  ["veyra_combatant_name", combatant["name"]]]))
         token_uuid = insert_shape(cursor, token)
+        if combatant["controller"]:
+            grant_token_control(cursor, token_uuid, users[combatant["controller"]], combatant["vision"])
         if token_asset:
             token_hash = token_asset[1]
             token_src = f"/static/assets/{token_hash[:2]}/{token_hash[2:4]}/{token_hash}"
@@ -338,7 +336,8 @@ def main() -> None:
     metadata, image_start, image_end = load_map_metadata(args.map)
     map_hash, _ = extract_embedded_image(args.map, image_start, image_end, args.assets_dir)
     encounter = json.loads(args.encounter.read_text(encoding="utf-8"))
-    combatants = load_combatants(args.repo, encounter)
+    mapping = load_mapping(args.controllers)
+    combatants = load_combatants(args.repo, encounter, mapping)
     connection = sqlite3.connect(args.db, timeout=5)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys=ON")
@@ -346,8 +345,11 @@ def main() -> None:
         with connection:
             cursor = connection.cursor()
             user = one(cursor, "SELECT * FROM user WHERE name=?", (args.user,), "user")
+            users = validate_mapping(cursor, encounter["players"], mapping)
             room = ensure_campaign(cursor, user["id"], args.campaign, args.unit_size, args.unit)
             location = configure_location(cursor, room["id"], args.location, args.unit_size, args.unit)
+            for character_id in encounter["players"]:
+                ensure_player_room(cursor, users[mapping[character_id]], room["id"], location["id"])
             floors = cursor.execute("SELECT id FROM floor WHERE location_id=?", (location["id"],)).fetchall()
             if len(floors) != 1:
                 raise ValueError(f"Expected one floor in {args.location}, found {len(floors)}")
@@ -357,6 +359,8 @@ def main() -> None:
             for required in ("map", "tokens", "fow"):
                 if required not in layers:
                     raise ValueError(f"Location is missing required layer: {required}")
+            participants = {int(user["id"]), *(users[mapping[item]] for item in encounter["players"])}
+            ensure_participant_locations(cursor, participants, location["id"], layers["tokens"])
             layer_ids = tuple(layers.values())
             placeholders = ",".join("?" for _ in layer_ids)
             cursor.execute(
@@ -382,7 +386,7 @@ def main() -> None:
                                         f"Veyra import - {combatant['name']}", token_hash)
                 token_assets[combatant["name"]] = (asset_id, token_hash)
             obstacles, tokens = import_shapes(cursor, metadata, layers, map_asset, map_hash,
-                                              combatants, token_assets)
+                                              combatants, token_assets, users)
             cursor.execute("UPDATE player_room SET active_location_id=? WHERE room_id=? AND role=1",
                            (location["id"], room["id"]))
         print(json.dumps({"campaign": args.campaign, "location": args.location, "tokens": tokens,

@@ -23,6 +23,8 @@ import { propertiesSystem } from "../../systems/properties";
 import { selectedSystem } from "../../systems/selected";
 import { selectedState } from "../../systems/selected/state";
 import { locationSettingsState } from "../../systems/settings/location/state";
+import type { TemplateTargetResult } from "../../systems/ui/templateTargeting";
+import { registerTemplateTargetingHandler } from "../../systems/ui/templateTargeting";
 import { SelectFeatures } from "../models/select";
 import { Tool } from "../tool";
 import { activateTool, toolMap } from "../tools";
@@ -33,6 +35,9 @@ export enum SpellShape {
     Cone = "cone",
     Hex = "hex",
 }
+
+let templateCompletion: ((result: TemplateTargetResult) => void) | undefined;
+let templateFocus: import("../../../core/id").LocalId | undefined;
 
 class SpellTool extends Tool implements ITool {
     readonly toolName = ToolName.Spell;
@@ -262,6 +267,20 @@ class SpellTool extends Tool implements ITool {
             if (!dropShapeId) {
                 propertiesSystem.setIsInvisible(this.shape.id, !this.state.showPublic, NO_SYNC);
                 layer.addShape(this.shape, SyncMode.FULL_SYNC, InvalidationMode.NORMAL);
+                if (templateCompletion !== undefined) {
+                    const focus = templateFocus === undefined ? undefined : getShape(templateFocus);
+                    const tokenIds = floorState.reactive.layers
+                        .flatMap((item) => [...item.getShapes({ includeComposites: false, onlyInView: false })])
+                        .filter((item) => item.id !== this.shape!.id && this.shape!.contains(item.center))
+                        .map((item) => item.id);
+                    const distance = focus === undefined ? 0 : Math.hypot(
+                        focus.center.x - this.shape.center.x,
+                        focus.center.y - this.shape.center.y,
+                    ) / getUnitDistance(1);
+                    templateCompletion({ tokenIds, originDistance: distance });
+                    templateCompletion = undefined;
+                    templateFocus = undefined;
+                }
             }
             this.shape = undefined;
 
@@ -273,3 +292,16 @@ class SpellTool extends Tool implements ITool {
 }
 
 export const spellTool = new SpellTool();
+
+registerTemplateTargetingHandler(async (request, completion) => {
+    const spellShape = request.shape as SpellShape;
+    if (!Object.values(SpellShape).includes(spellShape) || request.size <= 0) {
+        throw new Error("Unsupported spell template request.");
+    }
+    selectedSystem.set(request.focus);
+    spellTool.state.selectedSpellShape = spellShape;
+    spellTool.state.size = request.size;
+    templateFocus = request.focus;
+    templateCompletion = completion;
+    activateTool(ToolName.Spell);
+});

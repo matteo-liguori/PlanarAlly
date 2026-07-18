@@ -1,6 +1,9 @@
 import { SYSTEMS, SYSTEMS_STATE } from "../core/systems";
+import { coreStore } from "../store/core";
 import { getGlobalId, getShape } from "../game/id";
 import { registerContextMenuEntry, registerTab } from "../game/systems/ui/mods";
+import { registerMovementGuard } from "../game/systems/ui/movementGuards";
+import { beginTemplateTargeting } from "../game/systems/ui/templateTargeting";
 
 import { getDataBlockFunctions } from "./db";
 
@@ -10,6 +13,8 @@ const ui = {
     shape: {
         registerContextMenuEntry,
         registerTab,
+        registerMovementGuard,
+        beginTemplateTargeting,
     },
 };
 
@@ -20,6 +25,7 @@ async function gameOpened(mods?: (typeof loadedMods.value)[number][]): Promise<v
     for (const { id, mod, meta } of mods ?? loadedMods.value) {
         try {
             await mod.events?.initGame?.({
+                currentUser: coreStore.state.username,
                 systems: SYSTEMS,
                 systemsState: SYSTEMS_STATE,
                 ui,

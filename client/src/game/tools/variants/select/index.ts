@@ -59,6 +59,7 @@ import { selectedState } from "../../../systems/selected/state";
 import { locationSettingsState } from "../../../systems/settings/location/state";
 import { playerSettingsState } from "../../../systems/settings/players/state";
 import { openDefaultContextMenu, openShapeContextMenu } from "../../../ui/contextmenu/state";
+import { approveMovements } from "../../../systems/ui/movementGuards";
 import { TriangulationTarget, visionState } from "../../../vision/state";
 import { SelectFeatures } from "../../models/select";
 import { Tool } from "../../tool";
@@ -756,9 +757,22 @@ class SelectTool extends Tool implements ISelectTool {
                     await expandSelection(updateList);
                 }
 
-                sendShapePositionUpdate(updateList, false);
-
-                await teleportZoneSystem.checkTeleport(selectedSystem.get({ includeComposites: true }));
+                const movement = this.operationList?.type === "movement" ? this.operationList.shapes.map((item) => ({
+                    shape: item.uuid,
+                    from: item.from,
+                    to: item.to,
+                })) : [];
+                if (await approveMovements(movement)) {
+                    sendShapePositionUpdate(updateList, false);
+                    await teleportZoneSystem.checkTeleport(selectedSystem.get({ includeComposites: true }));
+                } else {
+                    for (const item of movement) {
+                        const shape = getShape(item.shape);
+                        if (shape !== undefined) shape.refPoint = toGP(item.from);
+                    }
+                    this.operationReady = false;
+                    layer.invalidate(false);
+                }
             }
             if (this.mode === SelectOperations.Resize) {
                 for (const sel of this.currentSelection) {
